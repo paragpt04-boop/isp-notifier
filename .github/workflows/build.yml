@@ -1,0 +1,117 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Generar carpeta android
+        run: |
+          mkdir -p /tmp/bk
+          cp -r lib /tmp/bk/lib
+          cp pubspec.yaml /tmp/bk/pubspec.yaml
+          flutter create . --org com.jsus --project-name isp_notifier --platforms=android
+          rm -rf lib
+          cp -r /tmp/bk/lib lib
+          cp /tmp/bk/pubspec.yaml pubspec.yaml
+
+      - name: Parchear AndroidManifest y Gradle
+        run: |
+          python3 - <<'PY'
+          import pathlib, re
+
+          # ---------- AndroidManifest ----------
+          m = pathlib.Path('android/app/src/main/AndroidManifest.xml')
+          s = m.read_text()
+
+          perms = """
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+              <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+              <uses-permission android:name="android.permission.VIBRATE"/>
+          """
+          if 'POST_NOTIFICATIONS' not in s:
+              i = s.index('>', s.index('<manifest')) + 1
+              s = s[:i] + perms + s[i:]
+
+          receivers = """
+                  <receiver android:exported="false"
+                      android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+                  <receiver android:exported="false"
+                      android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                          <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                          <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+                      </intent-filter>
+                  </receiver>
+          """
+          if 'ScheduledNotificationBootReceiver' not in s:
+              s = s.replace('</application>', receivers + '    </application>')
+
+          queries = """
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.VIEW"/>
+                      <data android:scheme="https"/>
+                  </intent>
+              </queries>
+          """
+          if '<queries>' not in s:
+              s = s.replace('</manifest>', queries + '</manifest>')
+
+          m.write_text(s)
+          print('manifest ok')
+
+          # ---------- Gradle (desugaring) ----------
+          kts = pathlib.Path('android/app/build.gradle.kts')
+          groovy = pathlib.Path('android/app/build.gradle')
+
+          if kts.exists():
+              g = kts.read_text()
+              if 'isCoreLibraryDesugaringEnabled' not in g:
+                  g = g.replace('compileOptions {',
+                                'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
+              if 'desugar_jdk_libs' not in g:
+                  g += '\n\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
+              kts.write_text(g)
+              print('gradle.kts ok')
+          elif groovy.exists():
+              g = groovy.read_text()
+              if 'coreLibraryDesugaringEnabled' not in g:
+                  g = g.replace('compileOptions {',
+                                'compileOptions {\n        coreLibraryDesugaringEnabled true', 1)
+              if 'desugar_jdk_libs' not in g:
+                  g += "\n\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
+              groovy.write_text(g)
+              print('gradle ok')
+          PY
+
+      - name: Instalar paquetes
+        run: flutter pub get
+
+      - name: Compilar APK
+        run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JSUS-ISP-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
