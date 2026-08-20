@@ -9,8 +9,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Avisos.i.iniciar();
-  await Avisos.i.reprogramar();
+  try {
+    await Avisos.i.iniciar();
+  } catch (_) {}
+  // La reprogramación no debe bloquear ni tumbar el arranque.
+  Avisos.i.reprogramar().catchError((_) {});
   runApp(const JsusISP());
 }
 
@@ -394,26 +397,38 @@ class Avisos {
 
     for (final c in clientes) {
       if (!c.activo || c.id == null) continue;
-      await plugin.zonedSchedule(
-        c.id!,
-        '${c.nombre} paga mañana',
-        armarMensaje(plantilla, c).replaceAll('\n', ' '),
-        _proxima(c.diaAviso, hora, minuto),
-        det,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
-        matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
-        payload: '${c.id}',
-      );
+      try {
+        await plugin.zonedSchedule(
+          c.id!,
+          '${c.nombre} paga mañana',
+          armarMensaje(plantilla, c).replaceAll('\n', ' '),
+          _proxima(c.diaAviso, hora, minuto),
+          det,
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+          matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
+          payload: '${c.id}',
+        );
+      } catch (_) {
+        // Un cliente con fecha problemática no debe impedir el arranque
+        // ni cancelar los avisos de los demás.
+      }
     }
   }
 
   tz.TZDateTime _proxima(int dia, int hora, int minuto) {
     final ahora = tz.TZDateTime.now(tz.local);
-    var t = tz.TZDateTime(tz.local, ahora.year, ahora.month, dia, hora, minuto);
+    // Acota el día al último día real de cada mes para no crear fechas inválidas.
+    int diaValido(int anio, int mes) =>
+        dia.clamp(1, DateTime(anio, mes + 1, 0).day);
+
+    var t = tz.TZDateTime(tz.local, ahora.year, ahora.month,
+        diaValido(ahora.year, ahora.month), hora, minuto);
     if (!t.isAfter(ahora)) {
-      t = tz.TZDateTime(tz.local, ahora.year, ahora.month + 1, dia, hora, minuto);
+      final m = ahora.month == 12 ? 1 : ahora.month + 1;
+      final a = ahora.month == 12 ? ahora.year + 1 : ahora.year;
+      t = tz.TZDateTime(tz.local, a, m, diaValido(a, m), hora, minuto);
     }
     return t;
   }
