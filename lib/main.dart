@@ -378,6 +378,8 @@ class Avisos {
         _proxima(c.diaAviso, hora, minuto),
         det,
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
         matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
         payload: '${c.id}',
       );
