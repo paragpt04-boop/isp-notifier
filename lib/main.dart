@@ -135,7 +135,13 @@ class Cliente {
       );
 
   /// Día en que se dispara el aviso (24 h antes).
-  int get diaAviso => diaPago > 1 ? diaPago - 1 : 28;
+  /// Día en que se dispara el aviso (24 h antes del vencimiento del mes actual).
+  int get diaAviso {
+    final f = DateTime.now();
+    final dia = diaPago.clamp(1, DateTime(f.year, f.month + 1, 0).day);
+    final fechaVence = DateTime(f.year, f.month, dia);
+    return fechaVence.subtract(const Duration(days: 1)).day;
+  }
 
   String get telefonoLimpio => telefono.replaceAll(RegExp(r'[^0-9]'), '');
 }
@@ -304,13 +310,30 @@ class DB {
 // ===========================================================================
 // ESTADO DE COBRO
 // ===========================================================================
+/// Último día real de un mes (28, 29, 30 o 31).
+int ultimoDiaMes(int anio, int mes) => DateTime(anio, mes + 1, 0).day;
+
+/// Fecha de vencimiento de este mes, ajustada si el mes es corto.
+/// Si el cliente paga el 31 y el mes tiene 30 días, vence el 30.
+DateTime vencimientoDe(Cliente c, [DateTime? ref]) {
+  final f = ref ?? DateTime.now();
+  final dia = c.diaPago.clamp(1, ultimoDiaMes(f.year, f.month));
+  return DateTime(f.year, f.month, dia);
+}
+
 Estado estadoDe(Cliente c, Set<int> pagados) {
   if (!c.activo) return Estado.inactivo;
   if (pagados.contains(c.id)) return Estado.alDia;
-  final hoy = DateTime.now().day;
-  if (hoy > c.diaPago) return Estado.vencido;
-  if (hoy == c.diaPago - 1) return Estado.venceManana;
-  if (c.diaPago - hoy <= 5) return Estado.porVencer;
+
+  final ahora = DateTime.now();
+  final hoy = DateTime(ahora.year, ahora.month, ahora.day);
+  final vence = vencimientoDe(c, hoy);
+  final dias = vence.difference(hoy).inDays; // + faltan, 0 hoy, - pasaron
+
+  if (dias < 0) return Estado.vencido; // ya pasó el día y no pagó
+  if (dias == 0) return Estado.venceManana; // vence hoy mismo
+  if (dias == 1) return Estado.venceManana; // vence mañana
+  if (dias <= 5) return Estado.porVencer;
   return Estado.alDia;
 }
 
@@ -1167,8 +1190,10 @@ class _FormClienteState extends State<FormCliente> {
               dropdownColor: C.surfaceAlt,
               style: const TextStyle(color: C.text, fontFamily: mono),
               decoration: _dec('Día de pago',
-                  ayuda: 'El aviso llega el día anterior. Rango 1 a 28.'),
-              items: List.generate(28, (i) => i + 1)
+                  ayuda:
+                      'El aviso llega el día anterior. Si el mes no tiene ese '
+                      'día (ej. 31 en febrero), usa el último día del mes.'),
+              items: List.generate(31, (i) => i + 1)
                   .map((d) => DropdownMenuItem(value: d, child: Text('Día $d')))
                   .toList(),
               onChanged: (v) => setState(() => _dia = v ?? 1),
